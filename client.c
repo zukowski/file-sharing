@@ -14,6 +14,8 @@
 #include "my_utils.h"
 
 #define SHARED_DIR "./Shared files"
+#define USER_INPUT_LEN 256
+#define TIMEOUT 1000
 
 char client_name[USERNAME_LEN];
 
@@ -26,20 +28,19 @@ void build_filelist(int *bufsize, char *filelist_buf) {
   FILE *fp;
 
   dirp = opendir(SHARED_DIR);
-
+  
   while (1) {
     entry = readdir(dirp);
     if(entry != NULL && strcmp(entry->d_name,"..") != 0 && strcmp(entry->d_name,".") != 0) {
-      printf("Filename: %s",entry->d_name);
       struct UserFile *file;
-      file = calloc(sizeof(struct UserFile),1); 
+      file = calloc(1,sizeof(struct UserFile)); 
       // UserFile.key
       strcpy(file->key,client_name);
       strcat(file->key,entry->d_name);
       
       // UserFile.filename
       strcpy(file->filename,entry->d_name);
-     
+      printf("Filename: %s\n",file->filename);
       // UserFile.filesize
       char *filepath;
       filepath = calloc(FILENAME_LEN*2,1);
@@ -52,13 +53,14 @@ void build_filelist(int *bufsize, char *filelist_buf) {
       fseek(fp, 0, SEEK_SET); // seek back to beginning of file
       fclose(fp);
       sprintf(file->filesize,"%d",size);
-       
+     
       // UserFile.owner
       strcpy(file->owner,client_name);
 
       // UserFile.owner_ip
       strcpy(file->owner_ip,"127.0.0.1");
       memcpy(filelist_buf,file,sizeof(struct UserFile));
+      filelist_buf += sizeof(struct UserFile);
       free(file);
       *bufsize += sizeof(struct UserFile);
     }
@@ -68,6 +70,59 @@ void build_filelist(int *bufsize, char *filelist_buf) {
   closedir(dirp);
 }
 
+void get_response(int sockfd) {
+  int n;
+  char *msg_buf = malloc(sizeof(struct UserFile)*FILELIST_LEN);
+  bzero(msg_buf,sizeof(msg_buf));
+  n = read(sockfd,msg_buf,10000); 
+  if (n < 0) error("ERROR reading from socket");
+  printf("%s\n",msg_buf);
+}
+
+void list_files_available(int sockfd) {
+  int n;
+  n = write(sockfd,LIST_CMD,sizeof(LIST_CMD));
+  if (n < 0) error("ERROR writing to socket");
+  printf("Wrote %d bytes to socket\n",n);
+  get_response(sockfd);
+}
+
+void send_file_list(int sockfd) {
+  int n;
+  char *filelist_buf = malloc(sizeof(struct UserFile)*FILELIST_LEN);
+  bzero(filelist_buf,sizeof(filelist_buf));
+  int bufsize = 0;
+  char msgbuf[100];
+  build_filelist(&bufsize, filelist_buf);
+  n = write(sockfd,SEND_LIST_CMD,sizeof(SEND_LIST_CMD));
+  printf("Buffer: %s\n",filelist_buf);
+  n = write(sockfd,filelist_buf,bufsize);
+  if (n < 0) error("Error writing to socket");
+  
+  fd_set rdset, wrset;
+  int s = -1;
+  int max_fd = sockfd + 1;
+  struct timeval selectTimeout;
+  
+  selectTimeout.tv_sec = TIMEOUT / 1000;
+  selectTimeout.tv_usec = (TIMEOUT % 1000) * 1000;
+
+  FD_ZERO(&rdset);
+  FD_ZERO(&wrset);
+  
+  // start monitoring for reads or timeout
+  if (s <= 0) FD_SET(sockfd, &rdset);
+  s = select(max_fd, &rdset, &wrset, NULL, &selectTimeout); 
+  if (s == -1) { printf("ERROR: Socket error. Exiting.\n"); exit(1); }
+  if (s > 0) {
+    n = read(sockfd,msgbuf,99);
+    printf("Response: %s\n",msgbuf);
+    fflush(stdout);
+  }
+  if (s == 0) {
+    printf("No response from server. PLease try again.\n");
+  }
+}
 
 int main(int argc, char *argv[])
 {
@@ -75,7 +130,7 @@ int main(int argc, char *argv[])
   struct sockaddr_in serv_addr;
   struct hostent *server;
 
-  char msg_buf[256];
+  char msg_buf[64];
   char *filelist_buf;
   filelist_buf = calloc(FILELIST_LEN, sizeof(struct UserFile));
 
@@ -108,7 +163,54 @@ int main(int argc, char *argv[])
   if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
     error("ERROR connecting");
   
-  printf("> ");
+  char *user_input = malloc(USER_INPUT_LEN);
+  char *command = malloc(COMMAND_LEN);
+  char *command_arg = malloc(FILENAME_LEN);
+  
+  n = write(sockfd,client_name,strlen(client_name));
+  
+  fd_set rdset, wrset;
+  int s = -1;
+  int max_fd = sockfd + 1;
+  struct timeval selectTimeout;
+  
+  selectTimeout.tv_sec = TIMEOUT / 1000;
+  selectTimeout.tv_usec = (TIMEOUT % 1000) * 1000;
+
+  FD_ZERO(&rdset);
+  FD_ZERO(&wrset);
+  
+  // start monitoring for reads or timeout
+  if (s <= 0) FD_SET(sockfd, &rdset);
+  s = select(max_fd, &rdset, &wrset, NULL, &selectTimeout); 
+  if (s == -1) { printf("ERROR: Socket error. Exiting.\n"); exit(1); }
+
+  if (s>0) {
+    n = read(sockfd,msg_buf,64);
+    printf("%s\n",msg_buf);
+  }
+
+  for(;;) {
+    printf("> ");
+    gets(user_input);
+    command = strtok(user_input," ");   
+
+    if (strcmp(command,LIST_CMD) == 0) {
+      printf("You typed: %s\n", command); 
+      list_files_available(sockfd);
+    }
+    else if (strcmp(command,GET_CMD) == 0) {
+      command_arg = strtok(NULL,"\0");
+      printf("You typed: %s %s\n", command, command_arg);
+    }
+    else if (strcmp(command,SEND_LIST_CMD) == 0) {
+      send_file_list(sockfd);
+    }
+    else { 
+      printf("Not a valid command. Type 'usage' for help.\n");
+    }
+  }
+    
   bzero(filelist_buf,sizeof(filelist_buf));
   int bufsize = 0;
   build_filelist(&bufsize, filelist_buf); 

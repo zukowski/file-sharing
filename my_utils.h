@@ -17,16 +17,22 @@
 #define USERNAME_LEN 64
 #define LOG_ENTRY_LEN 256
 #define OWNER_IP_LEN 16
+#define HEADER_LEN 32
+
+#define COMMAND_LEN 16
+#define LIST_CMD "List"
+#define GET_CMD "Get" 
+#define SEND_LIST_CMD "SendMyFilesList"
+#define EXIT_CMD "Exit"
 
 // structures
 struct User {
   char name[USERNAME_LEN];                /* key */
-  char files[FILELIST_LEN][USERNAME_LEN]; /* array of filenames */
   UT_hash_handle hh;                      /* makes this structure hashable */
 };
 
 struct UserFile {
-  char key[USERNAME_LEN + FILENAME_LEN + 1];
+  char key[USERNAME_LEN + FILENAME_LEN];
   char filename[FILENAME_LEN];
   char filesize[FILESIZE_LEN];
   char owner[USERNAME_LEN];

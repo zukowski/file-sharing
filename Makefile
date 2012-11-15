@@ -20,4 +20,4 @@ test: test.o
 	${CC} ${CFLAGS} -o $@ test.o
 
 clean:
-	rm *.o client server my_utils.o
+	rm *.o client server
