@@ -82,11 +82,12 @@ void receive_file(char *filename, char *ip) {
         (char *)&serv_addr.sin_addr.s_addr,
          server->h_length);
   serv_addr.sin_port = htons(port+1);
-  
+ 
+  printf("Connecting to peer on port %d\n",port+1);
   if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
     error("ERROR connecting");
 
-  get_response(sockfd);
+  //get_response(sockfd);
 }
 
 void receive_file_info(int sockfd) {
@@ -161,24 +162,6 @@ void send_file_list(int sockfd) {
   n = write(sockfd,filelist_buf,bufsize);
   if (n < 0) error("Error writing to socket");   
   get_response(sockfd);
-  /*
-  selectTimeout.tv_sec = TIMEOUT / 1000;
-  selectTimeout.tv_usec = (TIMEOUT % 1000) * 1000;
-
-  FD_ZERO(&rdset);
-  FD_ZERO(&wrset);
-  
-  // start monitoring for reads or timeout
-  if (s <= 0) FD_SET(sockfd, &rdset);
-  s = select(max_fd, &rdset, &wrset, NULL, &selectTimeout); 
-  if (s == -1) { printf("ERROR: Socket error. Exiting.\n"); exit(1); }
-  if (s > 0) {
-    n = read(sockfd,msgbuf,99);
-  }
-  if (s == 0) {
-    printf("No response from server. Please try again.\n");
-  }
-  */
 }
 
 void *handle_xfer_requests(void *my_port) { 
@@ -223,7 +206,7 @@ void *handle_xfer_requests(void *my_port) {
     if (s == -1) { printf("ERROR: Socket error. Exiting.\n"); exit(1); }
 
     if (s == 0) {
-      printf("Awaiting peer connections...\n");
+      //printf("Awaiting peer connections...\n");
       sleep(1);
     }
 
@@ -269,9 +252,7 @@ void *handle_user_input(void *sockfd) {
     command_arg = strtok(NULL,"\0");
 
     if (strcmp(command,LIST_CMD) == 0) {
-      pthread_mutex_lock(&mutex);
       list_files_available(_sockfd);
-      pthread_mutex_unlock(&mutex);
     }
     else if (strcmp(command,GET_CMD) == 0) {
       get_file(_sockfd, command_arg);
@@ -382,8 +363,8 @@ int main(int argc, char *argv[])
   if (r1 != 0) { fprintf(stderr, "thread create failed\n"); }
 
   // handle file transfer requests
-  r2 = pthread_create(&th2, 0, handle_xfer_requests, (void *)&port);
-  if (r2 != 0) { fprintf(stderr, "thread create failed\n"); } 
+  //r2 = pthread_create(&th2, 0, handle_xfer_requests, (void *)&port);
+  //if (r2 != 0) { fprintf(stderr, "thread create failed\n"); } 
 
   for(;;) {
     sleep(1);
