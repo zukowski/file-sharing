@@ -11,7 +11,7 @@ my_utils.o: my_utils.c my_utils.h
 #	${CC} ${CFLAGS} -c uthash-1.9.7/src/uthash.c
 
 client: my_utils.o client.o 
-	${CC} ${CFLAGS} -o $@ client.o 
+	${CC} ${CFLAGS} -pthread -o $@ client.o 
 
 server: my_utils.o server.o
 	${CC} ${CFLAGS} -pthread -o $@ my_utils.o server.o

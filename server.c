@@ -47,13 +47,9 @@ void init_user_struct(struct User *u) {
   bzero(&(u->name),USERNAME_LEN);
 }
 
-char *get_username(char *buf) {
-  return "ubuntu";    
-}
-
 void add_user(char *buf) {
   struct User *user;
-  HASH_FIND_INT(users, get_username(buf), user);
+  HASH_FIND_INT(users, buf, user);
   if (user == NULL) {
     user = calloc(1,sizeof(struct User));
     strcpy(user->name,buf);
@@ -66,31 +62,8 @@ void add_user(char *buf) {
   }
 }
 
-void add_file(struct UserFile *user_file) {
-  //struct UserFile *file;
-  //HASH_FIND_INT(user_files, user_file->key, file); 
-  struct UserFile *f;
-  int exists = 0;
-  for(f = user_files; f != NULL; f = f->hh.next) {
-    if (strcmp(f->key,user_file->key) == 0) {
-      exists = 1;
-      break;
-    }
-  }
-  if (exists == 0) {
-//if (file == NULL) { // update entry in case size or IP changed
-    //struct UserFile *copy;
-    //copy = malloc(sizeof(struct UserFile)); 
-    //strcpy(copy->key,user_file->key);
-    //strcpy(copy->filename,user_file->filename);
-    //strcpy(copy->filesize,user_file->filesize);
-    //strcpy(copy->owner,user_file->owner);
-    //strcpy(copy->owner_ip,user_file->owner_ip);
-    HASH_ADD_INT(user_files, key, user_file); 
-  //} 
-  }
-    //free(copy);
-  //free(file);
+void remove_user(struct User *user) {
+  
 }
 
 int setup_socket(int port) {
@@ -114,32 +87,35 @@ int setup_socket(int port) {
   return sockfd;
 }
 
+void add_file(struct UserFile *user_file) {
+  int exists = 0;
+  struct UserFile *f = malloc(sizeof(struct UserFile));
+  for(f = user_files; f != NULL; f = f->hh.next) {
+    if (strcmp(f->filename,user_file->filename) == 0) {
+      exists = 1;
+      printf("File exists\n");
+      break;
+    }
+  }
+  if (exists == 0) {
+    HASH_ADD_INT(user_files, filename, user_file); 
+  }
+}
+
 void receive_file_list(int sockfd) {
-  int n;
-  char *buffer;
-  buffer = malloc(sizeof(struct UserFile)*FILELIST_LEN);
-  bzero(buffer,sizeof(struct UserFile)*FILELIST_LEN);
-  int i;
-  int num_files;
-  n = read(sockfd,buffer,sizeof(struct UserFile)*FILELIST_LEN);
-  num_files = n/sizeof(struct UserFile);
-  printf("After command received, read %d bytes of data\nBuffer: %s\n",n,buffer);
+  int i, n, num_files;
+  char *buffer = malloc(sizeof(struct UserFile)*FILELIST_LEN);
+  n = recv(sockfd,buffer,sizeof(struct UserFile)*FILELIST_LEN,0);
+  num_files = n / sizeof(struct UserFile);
+  printf("Size of file list: %d bytes. %d files.\n",n,num_files);
   for (i = 0; i < num_files; i++) {
     struct UserFile *file = malloc(sizeof(struct UserFile));
-    //memcpy(file,buffer+i*sizeof(struct UserFile),sizeof(struct UserFile));
     memcpy(file,buffer,sizeof(struct UserFile));
-    printf("Received file info: %s\n",file->key);
+    printf("Filename: %s Size: %s Owner: %s Owner IP: %s\n",file->filename,file->filesize,file->owner,file->owner_ip);
     buffer += sizeof(struct UserFile);
     add_file(file);
-    //free(file);
   }
-  printf("Received list of %d files.\n",i); 
-  printf("Hash count: %d\n",HASH_COUNT(user_files)); 
-  struct UserFile *f;
-  for(f = user_files; f != NULL; f = f->hh.next) {
-    printf("Key: %s Name: %s Size: %s Owner: %s OwnerIP: %s\n", f->key, f->filename, f->filesize, f->owner, f->owner_ip);
-  }
-  n = write(sockfd,"Thank you for your list",23);
+  n = send(sockfd,"Thank you for your list",23,0);
   fflush(stdout);
 }
 
@@ -153,6 +129,29 @@ void send_file_list(int sockfd) {
     strcat(filelist_buf,fileinfo);
   }
   write(sockfd,filelist_buf,strlen(filelist_buf));
+}
+
+void send_file_info(int sockfd, char *filename) {
+  int n;
+  struct UserFile *file;
+  HASH_FIND_INT(user_files, filename, file);
+  if (file != NULL) {
+    char *buf = malloc(sizeof(struct UserFile));
+    memcpy(buf,file,sizeof(struct UserFile));
+    n = send(sockfd,buf,sizeof(struct UserFile),0);
+  }
+}
+
+void send_user_list(int sockfd) {
+  char *userlist_buf = malloc(1024);
+  strcat(userlist_buf,"Currently connected users:\n");
+  struct User *u;
+  for(u = users; u != NULL; u = u->hh.next) {
+    char *userinfo = calloc(512,1);
+    sprintf(userinfo,"%s\n",u->name);
+    strcat(userlist_buf,userinfo);
+  }
+  write(sockfd,userlist_buf,strlen(userlist_buf)); 
 }
 
 void accept_connection(int sockfd) {
@@ -180,10 +179,10 @@ void accept_connection(int sockfd) {
   n = write(newsockfd,welcome_msg,strlen(welcome_msg));
   
   // add user to users hash
-  //add_user(buffer);
+  add_user(buffer);
    
   pthread_mutex_lock(&mutex);
-	  // TODO: add your new user to your global list of users
+  add_user(buffer);
 	pthread_mutex_unlock(&mutex);
   
   r = pthread_create(&th, 0, connection, (void *)newsockfd);
@@ -315,7 +314,8 @@ int main(int argc,char *argv[])
     if(s == 0) {
       printf("Awaiting client connections...\n");
     }
-	  //if someone is trying to connect, you'll have to accept() 
+	  
+    //if someone is trying to connect, you'll have to accept() 
 	  //the connection
     //newsockfd = accept(...)
     if (s > 0) {
@@ -341,25 +341,37 @@ int main(int argc,char *argv[])
       if (s == -1) { printf("ERROR: Socket error. Exiting.\n"); exit(1); }
 
       if (s > 0) {
-        printf("Client has sent data. Timne to read.\n");
         bzero(buffer,100);
         n = recv(newsockfd,buffer,100,0);
         if (n < 0) error("ERROR reading from socket");
-        printf("Data read, sending welcome message\n"); 
+       
+        // add user to users hash
+        pthread_mutex_lock(&mutex);
+          add_user(buffer);
+	      pthread_mutex_unlock(&mutex);
+
         // send welcome message
         strcpy(welcome_msg,"Welcome, ");
         strcat(welcome_msg, buffer);
         strcat(welcome_msg,". You are now connected.");
-        n = write(newsockfd,welcome_msg,strlen(welcome_msg));
-  
-        // add user to users hash
-        //add_user(buffer);
-   
-        pthread_mutex_lock(&mutex);
-	      // TODO: add your new user to your global list of users
-	      pthread_mutex_unlock(&mutex);
-  
-        r = pthread_create(&th, 0, connection, (void *)&newsockfd);
+        n = write(newsockfd,welcome_msg,strlen(welcome_msg)); 
+
+        // notify other users that a new user has joined
+        struct User *u;
+        char *new_user_msg = calloc(64,1);
+        strcpy(new_user_msg,"New user connected: ");
+        for(u = users; u != NULL; u = u->hh.next) {
+          if (strcmp(u->name,buffer) != 0) {
+            printf("Sending new user message to: %s\n",u->name);
+            sprintf(new_user_msg,"%s\n",buffer);
+            n = send(u->sockfd,new_user_msg,sizeof(new_user_msg),0);
+          }
+        }
+
+        struct User *user = malloc(sizeof(struct User));
+        strcpy(user->name,buffer);
+        user->sockfd = newsockfd;
+        r = pthread_create(&th, 0, connection, (void *)user);
         if (r != 0) { fprintf(stderr, "thread create failed\n"); }
       }
 
@@ -399,19 +411,14 @@ int main(int argc,char *argv[])
 
 }
 
-
-
-
-
 //-----------------------------------------------------------------------------
-void *connection(void *sockid) {
-  //int s = (int)sockid;
-  printf("New connection created\n");
-  char buf[1000];
+void *connection(void *user) {
   //struct timeval curTime;
+  struct User *_user = (struct User *)user;
   int e;
   int rc = 1;
-  int sockfd = *(int *)sockid;
+  int sockfd = _user->sockfd;
+  printf("User sockfd: %d\n",_user->sockfd);
   pthread_detach(pthread_self()); //automatically clears the threads memory on exit
   fd_set rdset, wrset;
   int s = -1;
@@ -422,7 +429,8 @@ void *connection(void *sockid) {
   selectTimeout.tv_usec = (TIMEOUT % 1000) * 1000;
   FD_ZERO(&rdset);
   FD_ZERO(&wrset);
-
+  
+  char *buf = calloc(100,1);
   for (;;) {
     // start monitoring for reads or timeout
     if (s <= 0) {
@@ -437,26 +445,35 @@ void *connection(void *sockid) {
      * Here we handle all of the incoming text from a particular client.
      */
     if(s > 0) {
-      char buf[100];
+      bzero(buf,100);
       rc = recv(sockfd,buf,99,0);
       if (rc > 0)
-      { 
+      {
+        char *cmd = malloc(24);
+        cmd = strtok(buf," ");
+ 
         // which command are we processing? 
-        if (strcmp(buf,GET_CMD) == 0) {
-          printf("Received: %s\n", buf);
+        if (strcmp(cmd,GET_CMD) == 0) {
+          char *filename = malloc(FILENAME_LEN);
+          filename = strtok(NULL," ");
+          send_file_info(sockfd, filename);
         }
-        else if (strcmp(buf,LIST_CMD) == 0) {
-          printf("Received: %s\n", buf);
+        else if (strcmp(cmd,LIST_CMD) == 0) {
+          printf("Received: %s\n",cmd);
           send_file_list(sockfd);
         }
-        else if (strcmp(buf,SEND_LIST_CMD) == 0) {
-          printf("Received: %s\n", buf);
+        else if (strcmp(cmd,USERS_CMD) == 0) {
+          printf("Received: %s\n",cmd);
+          send_user_list(sockfd);
+        }
+        else if (strcmp(cmd,SEND_LIST_CMD) == 0) {
+          printf("Received: %s\n",cmd);
           receive_file_list(sockfd);
         }
-        else if (strcmp(buf,EXIT_CMD) == 0) {
+        else if (strcmp(cmd,EXIT_CMD) == 0) {
           //if I received an 'exit' message from this client
 	        pthread_mutex_lock(&mutex);
-	        //remove myself from the vector of active clients
+	        remove_user(_user);
 	        pthread_mutex_unlock(&mutex);
 	        pthread_exit(NULL);
 	        printf("Shouldn't see this!\n");
@@ -470,7 +487,7 @@ void *connection(void *sockid) {
 	        }
         }
         else {
-          printf("Unknown command received: %s\n",buf);
+          printf("Unknown command received: %s\n",cmd);
         }
         fflush(stdout);
       }

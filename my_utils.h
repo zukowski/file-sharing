@@ -22,17 +22,19 @@
 #define COMMAND_LEN 16
 #define LIST_CMD "List"
 #define GET_CMD "Get" 
+#define USERS_CMD "Users"
 #define SEND_LIST_CMD "SendMyFilesList"
+#define USAGE_CMD "usage"
 #define EXIT_CMD "Exit"
 
 // structures
 struct User {
   char name[USERNAME_LEN];                /* key */
+  int sockfd;
   UT_hash_handle hh;                      /* makes this structure hashable */
 };
 
 struct UserFile {
-  char key[USERNAME_LEN + FILENAME_LEN];
   char filename[FILENAME_LEN];
   char filesize[FILESIZE_LEN];
   char owner[USERNAME_LEN];
