@@ -1,6 +1,20 @@
 /*
- * Skeleton code of a server using TCP protocol.
- */
+  Author: Daniel Zukowski <daniel.zukowski@gmail.com>
+  Date: Nov 16, 2012
+ 
+  A basic TCP file transfer server.
+  This server doesn't actually store any files itself, but rather
+  serves as the central communication node throuhg which clients gain
+  information about files available across the network.
+  The server listens for incoming client connections and spawns a thread
+  for each new client connection using pthreads.
+
+  The server maintains a hash table of all files available on the network.
+  The hash table data structure itself is provided by the uthash project:
+  http://uthash.sourceforge.net/
+
+  Constants and Macros defined in app_utils.h
+*/
 
 #include <stdio.h>
 #include <sys/types.h>
@@ -14,39 +28,40 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include "my_utils.h"
+
 #define MAX_CONNECTS 50
 #define TCP_PROTO 6
-#define TIMEOUT 2000
 
-/**
- * [SYN HEADER]
- * offset            data
- * -----------------------------
- *
- *
- * [SYN BODY]   
- * offset  length         data 
- * -----------------------------
- * 0       USERNAME_LEN   client name
- *            
- */
 
-/*
- * You should use a globally declared linked list or an array to 
- * keep track of your connections. Be sure to manage either properly
- */
+//------------------------------------------------
+// Global vars                                    
+//------------------------------------------------
 
-// global variables
+// a threaded function for handling client connections
 void *connection(void *);
+
+// from argv: the name of the log file
 char log_filename[FILENAME_LEN];
+
+// hash table of connected users
 struct User *users = NULL;
+
+// hash table of files offered for sharing
 struct UserFile *user_files = NULL; 
+
+// mutex for atomic actions
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-void init_user_struct(struct User *u) {
-  bzero(&(u->name),USERNAME_LEN);
-}
 
+//------------------------------------------------
+// Functions                                    
+//------------------------------------------------
+
+
+/**
+ * Adds a User structure to the global users hash table
+ * if its key (i.e. it's name) does not yet exist
+ */
 void add_user(struct User *user) {
   struct User *u;
   int exists = 0;
@@ -65,10 +80,17 @@ void add_user(struct User *user) {
   }
 }
 
+/**
+ * Removes a User structure from the global users hash table
+ */
 void remove_user(struct User *user) {
-  
+  // TODO
 }
 
+/**
+ * Provides basic TCP stream socket set up and binding.
+ * Returns the socket descriptor created. 
+ */
 int setup_socket(int port) {
   int sockfd;
   struct sockaddr_in serv_addr;
@@ -90,9 +112,14 @@ int setup_socket(int port) {
   return sockfd;
 }
 
+/**
+ * Adds a UserFile struct to the global user_files hash table.
+ */
 void add_file(struct UserFile *user_file) {
   int exists = 0;
   struct UserFile *f = malloc(sizeof(struct UserFile));
+  
+  // iterate over hash table to find if key exists
   for(f = user_files; f != NULL; f = f->hh.next) {
     if (strcmp(f->filename,user_file->filename) == 0) {
       exists = 1;
@@ -100,27 +127,40 @@ void add_file(struct UserFile *user_file) {
     }
   }
   if (exists == 0) {
+    // add UserFile to hash table
     HASH_ADD_INT(user_files, filename, user_file); 
   }
 }
 
+/**
+ * Receives and processes a list of shared files from a client.
+ */
 void receive_file_list(int sockfd, struct User *user) {
   int i, n, num_files;
   char *buffer = malloc(sizeof(struct UserFile)*FILELIST_LEN);
   n = recv(sockfd,buffer,sizeof(struct UserFile)*FILELIST_LEN,0);
+
+  // determine how many files have been received by dividing the size of the
+  // byte stream by the size of a UserFile struct
   num_files = n / sizeof(struct UserFile);
+
+  // now add the UserFiles to the hash table
   for (i = 0; i < num_files; i++) {
     struct UserFile *file = malloc(sizeof(struct UserFile));
     memcpy(file,buffer,sizeof(struct UserFile));
     buffer += sizeof(struct UserFile);
-    // handle IP address
+    // special handling of the IP address field
     inet_ntop(AF_INET,&(user->addr.sin_addr.s_addr),file->owner_ip,OWNER_IP_LEN);
     add_file(file);
   }
+
+  // Always thank your client
   n = send(sockfd,"Thank you for your list",23,0);
-  fflush(stdout);
 }
 
+/**
+ * Builds a formatted table of file information
+ */
 void build_file_list(char *filelist_buf) {
   strcat(filelist_buf,"File name \t|| File size \t|| File owner \t|| File owner's IP address\n\n");
   struct UserFile *f;
@@ -131,6 +171,9 @@ void build_file_list(char *filelist_buf) {
   }  
 }
 
+/**
+ * Send the list of currently available user files to the client
+ */
 void send_file_list(int sockfd) {
   int n;
   char *filelist_buf = malloc(sizeof(struct UserFile)*FILELIST_LEN);
@@ -139,17 +182,23 @@ void send_file_list(int sockfd) {
   if (n < 0) error("ERROR writing to socket");
 }
 
+/**
+ * Send information about a specific file upon client request.
+ */
 void send_file_info(int sockfd, char *filename) {
   int n;
-  struct UserFile *file;
-  HASH_FIND_INT(user_files, filename, file);
-  if (file != NULL) {
-    char *buf = malloc(sizeof(struct UserFile));
-    memcpy(buf,file,sizeof(struct UserFile));
-    n = send(sockfd,buf,sizeof(struct UserFile),0);
-    if (n < 0) error("ERROR writing to socket");
+  struct UserFile *file = NULL;
+  for (file = user_files; file != NULL; file = file->hh.next) {
+    if (strcmp(file->filename,filename) == 0) {
+      char *buf = malloc(sizeof(struct UserFile));
+      printf("Found file: %s\n",file->filename);
+      memcpy(buf,file,sizeof(struct UserFile));
+      n = send(sockfd,buf,sizeof(struct UserFile),0);
+      if (n < 0) error("ERROR writing to socket");
+      break;
+    }
   }
-  else {
+  if (file == NULL) {
     char *buf = malloc(64);
     strcpy(buf,MSG_FILE_NA);
     n = send(sockfd,buf,strlen(MSG_FILE_NA),0);
@@ -157,6 +206,9 @@ void send_file_info(int sockfd, char *filename) {
   }
 }
 
+/**
+ * Send a list of connected users to the client.
+ */
 void send_user_list(int sockfd) {
   int n;
   char *userlist_buf = malloc(1024);
@@ -173,7 +225,6 @@ void send_user_list(int sockfd) {
 
 int main(int argc,char *argv[])
 {
-     
   struct timeval currTime;
   int sockfd;
   int port;
@@ -203,32 +254,16 @@ int main(int argc,char *argv[])
    * here you should listen() on your TCP socket
    */
   listen(sockfd,5);
-
+  
+  SELECT_INIT();
   for ( ; ; ) //endless loop
   {
-    fd_set rdset, wrset;
-    int s = -1;
-    int max_fd = sockfd + 1;
-    struct timeval selectTimeout;
-  
-    selectTimeout.tv_sec = TIMEOUT / 1000;
-    selectTimeout.tv_usec = (TIMEOUT % 1000) * 1000;
-
-    FD_ZERO(&rdset);
-    FD_ZERO(&wrset);
-
-    // start monitoring for reads or timeout
-    if (s <= 0) FD_SET(sockfd, &rdset);
-  
-    s = select(max_fd, &rdset, &wrset, NULL, &selectTimeout); 
-    
-    if (s == -1) { printf("ERROR: Socket error. Exiting.\n"); exit(1); }
-
+    SELECT(); 
     if(s == 0) {
       // timeout, do nothing
     }
 	  
-    if (s > 0) {
+    if (s > 0) { // something ready for read, probably a client connection request
       int n, r;
       socklen_t clilen;
       int newsockfd;
@@ -236,10 +271,12 @@ int main(int argc,char *argv[])
       char buffer[100];
       char welcome_msg[100];
       pthread_t th;
-      //void *res;
 
       clilen = sizeof(cli_addr);
+      
+      // accept connection
       newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
+
       if (newsockfd < 0) error("ERROR on accept");
       FD_SET(newsockfd, &rdset);
       max_fd = newsockfd + 1;
@@ -253,17 +290,18 @@ int main(int argc,char *argv[])
         n = recv(newsockfd,buffer,100,0);
         if (n < 0) error("ERROR reading from socket");
     
+        // since a new user connected, let's review the current file list
         char *filelist_buf = malloc(sizeof(struct UserFile)*FILELIST_LEN);
         build_file_list(filelist_buf);
-         
         printf("%s just started connecting. This is the updated file list from all clients:\n%s\n",buffer,filelist_buf); 
+        
         // add user to users hash
         pthread_mutex_lock(&mutex);
-        struct User *user = malloc(sizeof(struct User));
-        strcpy(user->name,buffer);
-        memcpy(&(user->addr),&cli_addr,sizeof(struct sockaddr_in));
-        user->sockfd = newsockfd;
-        add_user(user);
+          struct User *user = malloc(sizeof(struct User));
+          strcpy(user->name,buffer);
+          memcpy(&(user->addr),&cli_addr,sizeof(struct sockaddr_in));
+          user->sockfd = newsockfd;
+          add_user(user);
 	      pthread_mutex_unlock(&mutex);
 
         // send welcome message
@@ -275,17 +313,15 @@ int main(int argc,char *argv[])
         // notify other users that a new user has joined
         /*
         struct User *u;
-        char *new_user_msg = calloc(64,1);
+        char *new_user_msg = malloc(128);
         strcpy(new_user_msg,"New user connected: ");
         for(u = users; u != NULL; u = u->hh.next) {
           if (strcmp(u->name,buffer) != 0) {
-            printf("Sending new user message to: %s\n",u->name);
-            sprintf(new_user_msg,"%s\n",buffer);
-            n = send(u->sockfd,new_user_msg,sizeof(new_user_msg),0);
+            sprintf(new_user_msg,"A new user has joined: %s\n",buffer);
+            n = send(u->sockfd,new_user_msg,strlen(new_user_msg),0);
           }
         }
         */
-
         r = pthread_create(&th, 0, connection, (void *)user);
         if (r != 0) { fprintf(stderr, "thread create failed\n"); }
       }
@@ -368,8 +404,8 @@ void *connection(void *user) {
  
         // which command are we processing? 
         if (strcmp(cmd,GET_CMD) == 0) {
-          char *filename = malloc(FILENAME_LEN);
-          filename = strtok(NULL," ");
+          char *filename = calloc(FILENAME_LEN,1);
+          filename = strtok(NULL,"\0");
           send_file_info(sockfd, filename);
         }
         else if (strcmp(cmd,LIST_CMD) == 0) {

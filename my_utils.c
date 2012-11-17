@@ -10,26 +10,40 @@
 #include <sys/time.h>
 #include "uthash-1.9.7/src/uthash.h"
 
+// constants
 #define DATETIME_LEN 23
+
 // global variables 
 char now[DATETIME_LEN];
 
-void error(const char *msg) {
+void error(const char *msg)
+{
   perror(msg);
   exit(1);
 }
 
-void _now() {
+void _now()
+{
   time_t currentTime = time(NULL);
   struct tm timeStruct;
   localtime_r(&currentTime, &timeStruct);
   strftime(now, DATETIME_LEN, "%Y-%m-%d %H:%M:%S", &timeStruct);
 }
 
-void _log(const char *logFileName, char *message) {
+void _log(const char *logFileName, char *message)
+{
   FILE *logFile = fopen(logFileName,"a");
   _now();
   fprintf(logFile,"%s %s\n",now,message);
   fclose(logFile);
+}
+
+char *remove_newline(char *s)
+{
+  int len = strlen(s);
+  if (len > 0 && s[len-1] == '\n')  // if there's a newline
+    s[len-1] = '\0';          // truncate the string
+
+  return s;
 }
 
