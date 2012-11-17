@@ -13,7 +13,7 @@
 #define DATETIME_LEN 23
 #define FILELIST_LEN 128
 #define FILENAME_LEN 64
-#define FILESIZE_LEN 6
+#define FILESIZE_LEN 10
 #define USERNAME_LEN 64
 #define LOG_ENTRY_LEN 256
 #define OWNER_IP_LEN 16
@@ -24,13 +24,15 @@
 #define GET_CMD "Get" 
 #define USERS_CMD "Users"
 #define SEND_LIST_CMD "SendMyFilesList"
-#define USAGE_CMD "usage"
+#define USAGE_CMD "Usage"
 #define EXIT_CMD "Exit"
-
+#define MSG_BUSY "The machine hosting this file is not available at this moment, please wait a little and try another time or get the file from another machine"
+#define MSG_FILE_NA "File requested is not available"
 // structures
 struct User {
   char name[USERNAME_LEN];                /* key */
   int sockfd;
+  struct sockaddr_in addr;
   UT_hash_handle hh;                      /* makes this structure hashable */
 };
 

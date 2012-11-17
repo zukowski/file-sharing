@@ -47,16 +47,19 @@ void init_user_struct(struct User *u) {
   bzero(&(u->name),USERNAME_LEN);
 }
 
-void add_user(char *buf) {
-  struct User *user;
-  HASH_FIND_INT(users, buf, user);
-  if (user == NULL) {
-    user = calloc(1,sizeof(struct User));
-    strcpy(user->name,buf);
+void add_user(struct User *user) {
+  struct User *u;
+  int exists = 0;
+  for (u = users; u != NULL; u = u->hh.next) {
+    if (strcmp(u->name,user->name) == 0) {
+      exists = 1;
+      break; 
+    }	
+  }
+  if (exists == 0) {
     HASH_ADD_INT(users, name, user);
     char *message;
     message = calloc(LOG_ENTRY_LEN,1);
-    sprintf(message,"User connected: %s",user->name);
     _log(log_filename,message);
     free(message);
   }
@@ -93,7 +96,6 @@ void add_file(struct UserFile *user_file) {
   for(f = user_files; f != NULL; f = f->hh.next) {
     if (strcmp(f->filename,user_file->filename) == 0) {
       exists = 1;
-      printf("File exists\n");
       break;
     }
   }
@@ -102,33 +104,37 @@ void add_file(struct UserFile *user_file) {
   }
 }
 
-void receive_file_list(int sockfd) {
+void receive_file_list(int sockfd, struct User *user) {
   int i, n, num_files;
   char *buffer = malloc(sizeof(struct UserFile)*FILELIST_LEN);
   n = recv(sockfd,buffer,sizeof(struct UserFile)*FILELIST_LEN,0);
   num_files = n / sizeof(struct UserFile);
-  printf("Size of file list: %d bytes. %d files.\n",n,num_files);
   for (i = 0; i < num_files; i++) {
     struct UserFile *file = malloc(sizeof(struct UserFile));
     memcpy(file,buffer,sizeof(struct UserFile));
-    printf("Filename: %s Size: %s Owner: %s Owner IP: %s\n",file->filename,file->filesize,file->owner,file->owner_ip);
     buffer += sizeof(struct UserFile);
+    // handle IP address
+    inet_ntop(AF_INET,&(user->addr.sin_addr.s_addr),file->owner_ip,OWNER_IP_LEN);
     add_file(file);
   }
   n = send(sockfd,"Thank you for your list",23,0);
   fflush(stdout);
 }
 
-void send_file_list(int sockfd) {
-  int n;
-  char *filelist_buf = malloc(sizeof(struct UserFile)*FILELIST_LEN);
+void build_file_list(char *filelist_buf) {
   strcat(filelist_buf,"File name \t|| File size \t|| File owner \t|| File owner's IP address\n\n");
   struct UserFile *f;
   for(f = user_files; f != NULL; f = f->hh.next) {
     char fileinfo[256];
     sprintf(fileinfo,"%s \t|| %s \t || %s \t || %s \t\n",f->filename,f->filesize,f->owner,f->owner_ip);
     strcat(filelist_buf,fileinfo);
-  }
+  }  
+}
+
+void send_file_list(int sockfd) {
+  int n;
+  char *filelist_buf = malloc(sizeof(struct UserFile)*FILELIST_LEN);
+  build_file_list(filelist_buf);
   n = send(sockfd,filelist_buf,strlen(filelist_buf),0);
   if (n < 0) error("ERROR writing to socket");
 }
@@ -141,6 +147,12 @@ void send_file_info(int sockfd, char *filename) {
     char *buf = malloc(sizeof(struct UserFile));
     memcpy(buf,file,sizeof(struct UserFile));
     n = send(sockfd,buf,sizeof(struct UserFile),0);
+    if (n < 0) error("ERROR writing to socket");
+  }
+  else {
+    char *buf = malloc(64);
+    strcpy(buf,MSG_FILE_NA);
+    n = send(sockfd,buf,strlen(MSG_FILE_NA),0);
     if (n < 0) error("ERROR writing to socket");
   }
 }
@@ -228,7 +240,6 @@ int main(int argc,char *argv[])
 
       clilen = sizeof(cli_addr);
       newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
-      printf("New sockid: %d\n",newsockfd);
       if (newsockfd < 0) error("ERROR on accept");
       FD_SET(newsockfd, &rdset);
       max_fd = newsockfd + 1;
@@ -241,10 +252,18 @@ int main(int argc,char *argv[])
         bzero(buffer,100);
         n = recv(newsockfd,buffer,100,0);
         if (n < 0) error("ERROR reading from socket");
-       
+    
+        char *filelist_buf = malloc(sizeof(struct UserFile)*FILELIST_LEN);
+        build_file_list(filelist_buf);
+         
+        printf("%s just started connecting. This is the updated file list from all clients:\n%s\n",buffer,filelist_buf); 
         // add user to users hash
         pthread_mutex_lock(&mutex);
-        add_user(buffer);
+        struct User *user = malloc(sizeof(struct User));
+        strcpy(user->name,buffer);
+        memcpy(&(user->addr),&cli_addr,sizeof(struct sockaddr_in));
+        user->sockfd = newsockfd;
+        add_user(user);
 	      pthread_mutex_unlock(&mutex);
 
         // send welcome message
@@ -254,6 +273,7 @@ int main(int argc,char *argv[])
         n = send(newsockfd,welcome_msg,strlen(welcome_msg),0); 
 
         // notify other users that a new user has joined
+        /*
         struct User *u;
         char *new_user_msg = calloc(64,1);
         strcpy(new_user_msg,"New user connected: ");
@@ -264,10 +284,8 @@ int main(int argc,char *argv[])
             n = send(u->sockfd,new_user_msg,sizeof(new_user_msg),0);
           }
         }
+        */
 
-        struct User *user = malloc(sizeof(struct User));
-        strcpy(user->name,buffer);
-        user->sockfd = newsockfd;
         r = pthread_create(&th, 0, connection, (void *)user);
         if (r != 0) { fprintf(stderr, "thread create failed\n"); }
       }
@@ -315,7 +333,6 @@ void *connection(void *user) {
   int e;
   int rc = 1;
   int sockfd = _user->sockfd;
-  printf("User sockfd: %d\n",_user->sockfd);
   pthread_detach(pthread_self()); //automatically clears the threads memory on exit
   fd_set rdset, wrset;
   int s = -1;
@@ -356,16 +373,13 @@ void *connection(void *user) {
           send_file_info(sockfd, filename);
         }
         else if (strcmp(cmd,LIST_CMD) == 0) {
-          printf("Received: %s\n",cmd);
           send_file_list(sockfd);
         }
         else if (strcmp(cmd,USERS_CMD) == 0) {
-          printf("Received: %s\n",cmd);
           send_user_list(sockfd);
         }
         else if (strcmp(cmd,SEND_LIST_CMD) == 0) {
-          printf("Received: %s\n",cmd);
-          receive_file_list(sockfd);
+          receive_file_list(sockfd,_user);
         }
         else if (strcmp(cmd,EXIT_CMD) == 0) {
           //if I received an 'exit' message from this client

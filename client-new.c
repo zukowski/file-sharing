@@ -17,16 +17,14 @@
 #define SHARED_DIR "./Shared files"
 #define DL_DIR "./Downloaded files"
 #define USER_INPUT_LEN 256
-#define MAX_FILE_CHUNK 10490000 // 10MB
+#define MAX_FILE_CHUNK 102400
 #define STOP_FLAG "[!!!STOP!!!]"
 #define TIMEOUT 1000
-#define MAX_TIMEOUTS 5
 
 char client_name[USERNAME_LEN];
 struct UserFile *my_files = NULL;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 int port;
-int sending = 0;
 
 // You may/may not use pthread for the client code. The client is communicating with
 // the server most of the time until he recieves a "GET <file>" request from another client.
@@ -76,7 +74,7 @@ void receive_file_data(int sockfd, char *filename) {
   strcat(filepath,"/");
   strcat(filepath,filename);
   fp = fopen(filepath,"w");
-  fclose(fp); 
+  
   fd_set rdset, wrset;
   int s = -1;
   int max_fd = sockfd + 1;
@@ -84,46 +82,29 @@ void receive_file_data(int sockfd, char *filename) {
   
   selectTimeout.tv_sec = TIMEOUT / 1000;
   selectTimeout.tv_usec = (TIMEOUT % 1000) * 1000;
-  
-  int to = 0;
-  
-  while (n > 0) {
+
+  for (;;) {
     FD_ZERO(&rdset);
     FD_ZERO(&wrset);
-    selectTimeout.tv_sec = TIMEOUT / 1000;
-    selectTimeout.tv_usec = (TIMEOUT % 1000) * 1000;
- 
+  
     // start monitoring for reads or timeout
     if (s <= 0) FD_SET(sockfd, &rdset);
-    
     s = select(max_fd, &rdset, &wrset, NULL, &selectTimeout); 
-    
     if (s == -1) { printf("ERROR: Socket error. Exiting.\n"); exit(1); }
-    if (s == 0) {
-      to++;
-      if (to >= MAX_TIMEOUTS) {
-        break;
-      }
-    }
-   
+
     if (s > 0) {
-      to = 0;
-      buf = calloc(MAX_FILE_CHUNK,1);
-      n = recv(sockfd,buf,MAX_FILE_CHUNK,0);
-      if (n < 0) printf("Some error reading socket\n"); 
+      buf = calloc(sizeof(buf),1);
+      n = recv(sockfd,buf,MAX_FILE_CHUNK,0); 
       if (n > 0) {
         if (strcmp(buf,STOP_FLAG) == 0) {
-          //printf("Stop flag found\n");
+          fclose(fp);
           break;
         }
-        fp = fopen(filepath,"a");
         fwrite(buf,1,n,fp);
-        fclose(fp);
-      }
-      free(buf);    
+        printf("%d bytes written to %s/%s\n",n,DL_DIR,filename);
+      }      
     }
   }
-  printf("Finished downloading file\n");
 }
 
 void receive_file(char *filename, char *ip) {
@@ -147,20 +128,18 @@ void receive_file(char *filename, char *ip) {
          server->h_length);
   serv_addr.sin_port = htons(port+1);
  
+  printf("Connecting to peer on port %d\n",port+1);
   if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
     error("ERROR connecting");
 
-  char *file_request = malloc(128);
-  sprintf(file_request,"%s %s",filename,client_name);
-  
-  // send the filename and client_name to the peer
-  n = send(sockfd,file_request,strlen(file_request),0);
+  // get connected message
+  get_response(sockfd);
+
+  // send the filename to the peer
+  n = send(sockfd,filename,strlen(filename),0);
 
   // get data
   receive_file_data(sockfd, filename);
-  
-  // close connection
-  close(sockfd);
 }
 
 void receive_file_info(int sockfd) {
@@ -184,27 +163,18 @@ void receive_file_info(int sockfd) {
 
   if (s > 0) {
     n = read(sockfd,buf,sizeof(struct UserFile));
-    if (strcmp(buf,MSG_BUSY) == 0) {
-      printf(MSG_BUSY);
-      printf("\n");
-    }
-    else if (strcmp(buf,MSG_FILE_NA) == 0) {
-      printf("%s\n",MSG_FILE_NA);
-    }
-    else {
-      struct UserFile *file = malloc(sizeof(struct UserFile));
-      memcpy(file,buf,sizeof(struct UserFile));
-      printf("Start downloading %s from %s\n",file->filename,file->owner);
-      receive_file(file->filename, file->owner_ip);
-    }
+    struct UserFile *file = malloc(sizeof(struct UserFile));
+    memcpy(file,buf,sizeof(struct UserFile));
+    printf("File info: %s %s\n",file->filename,file->owner_ip);
+    receive_file(file->filename, file->owner_ip); 
   } 
   if (n < 0) error("ERROR reading from socket");
 }
 
 void get_file(int sockfd, char *filename) {
   int n;
-  char *buf = calloc(128,1);
-  strcat(buf,GET_CMD);
+  char *buf = calloc(strlen(GET_CMD) + 1 + strlen(filename),1);
+  strcpy(buf,GET_CMD);
   strcat(buf," ");
   strcat(buf,filename);
   n = send(sockfd,buf,strlen(buf),0);
@@ -260,6 +230,7 @@ void *handle_xfer_requests(void *my_port) {
   bzero((char *) &serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_addr.s_addr = INADDR_ANY;
+  printf("Xfer port #: %d\n",port+1);
   serv_addr.sin_port = htons(port+1);
   
   if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
@@ -293,61 +264,52 @@ void *handle_xfer_requests(void *my_port) {
     }
 
     if (s > 0) {
-      int n;
-      int r;
+      printf("Peer request received\n");
+      int n, r;
       socklen_t clilen;
       int newsockfd;
       struct sockaddr_in cli_addr;
       char buffer[100];
       bzero(buffer,100);
-      char owner[USERNAME_LEN];
       char welcome_msg[100];
       pthread_t th;
       
+
       clilen = sizeof(cli_addr);
       newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
-      
-      if (sending == 1) {
-        n = send(newsockfd,MSG_BUSY,strlen(MSG_BUSY),0);  
-        close(newsockfd);
-        continue;
-      }
-      else {
-        sending = 1;
-        
-        // extract filename
-        char *file_request = malloc(FILENAME_LEN + 1 + USERNAME_LEN);
-        n = recv(newsockfd,file_request,FILENAME_LEN + 1 +USERNAME_LEN,0);
+      printf("New sockid: %d\n",newsockfd);
 
-        char *filename = malloc(FILENAME_LEN);
-        char *owner = malloc(USERNAME_LEN);
-        filename = strtok(file_request," ");
-        owner = strtok(NULL,"\0");
- 
-        // open file, buffer, and send data
-        FILE *fp;
-        char *filepath = malloc(128);
-        char *buf = calloc(MAX_FILE_CHUNK,1);
-        int m;
-        strcpy(filepath,SHARED_DIR);
-        strcat(filepath,"/");
-        strcat(filepath,filename);
-        fp = fopen(filepath,"r");
-        m = 1;
-        n = 1;
-        printf("Sending file %s to client %s\n",filename, owner);
-        while (n > 0 && feof(fp) == 0) {
-          m = fread(buf,1,MAX_FILE_CHUNK,fp);
-          n = send(newsockfd,buf,m,0);
-        }
-        close(newsockfd);
-        sending = 0;
+      // send connected message 
+      strcpy(welcome_msg,"Connected with peer.\n");
+      n = send(newsockfd,welcome_msg,strlen(welcome_msg),0);
+
+      // extract filename
+      char *filename = malloc(FILENAME_LEN);
+      n = recv(newsockfd,filename,FILENAME_LEN,0);
+      printf("File requested from peer: %s\n",filename);
+
+      // open file, buffer and send data
+      FILE *fp;
+      char *filepath = malloc(128);
+      char *buf = calloc(MAX_FILE_CHUNK,1);
+      int m;
+      strcpy(filepath,SHARED_DIR);
+      strcat(filepath,"/");
+      strcat(filepath,filename);
+      fp = fopen(filepath,"r");
+      m = 1;
+      n = 1;
+      while (n > 0 && feof(fp) == 0) {
+        m = fread(buf,1,MAX_FILE_CHUNK,fp);
+        n = send(newsockfd,buf,m,0);
       }
+      n = send(newsockfd,STOP_FLAG,strlen(STOP_FLAG),0);
+      printf("Sent all file data\n");
     }
   }
 
   close(sockfd);
-   
+  
   return 0;
 }
 
@@ -355,7 +317,7 @@ void *handle_user_input(void *sockfd) {
   pthread_detach(pthread_self()); //automatically clears the threads memory on exit
   char *user_input = malloc(USER_INPUT_LEN);
   char *command = malloc(COMMAND_LEN);
-  char *filename = malloc(FILENAME_LEN);
+  char *command_arg = malloc(FILENAME_LEN);
   int _sockfd = *(int *)sockfd;
   
   for(;;) {
@@ -365,12 +327,13 @@ void *handle_user_input(void *sockfd) {
 
     gets(user_input);
     command = strtok(user_input," ");  
+    command_arg = strtok(NULL,"\0");
+
     if (strcmp(command,LIST_CMD) == 0) {
       list_files_available(_sockfd);
     }
-    else if (strcmp(command,GET_CMD) == 0) { 
-      filename = strtok(NULL," ");
-      get_file(_sockfd, filename);
+    else if (strcmp(command,GET_CMD) == 0) {
+      get_file(_sockfd, command_arg);
     }
     else if (strcmp(command,USERS_CMD) == 0) {
       user_list(_sockfd);
@@ -381,8 +344,8 @@ void *handle_user_input(void *sockfd) {
     else if (strcmp(command,USAGE_CMD) ==0) {
       printf("List\t\t\tList available files.\n");
       printf("Users\t\t\tList active users.\n");
-      printf("SendMyfilesList\t\tSend list of shared files to server.\n");
-      printf("Get <filename>\t\tGet a file from the network.\n");
+      printf("SendMyfilesList\tSend list of shared files to server.\n");
+      printf("Get <filename>\tGet a file from the network.\n");
     }
     else if (strcmp(command,EXIT_CMD) == 0) {
       // TODO
@@ -391,9 +354,26 @@ void *handle_user_input(void *sockfd) {
       break;
     }
     else { 
-      printf("Not a valid command. Type 'Usage' for help.\n");
+      printf("Not a valid command. Type 'usage' for help.\n");
     }
   }
+  return 0;
+}
+
+// listens for incoming requests for file transfer
+void *connection(void *sockfd) {
+  /*int _sockfd = (int) sockfd;
+  fd_set rdset, wrset;
+  int s = -1;
+  int max_fd = _sockfd + 1;
+  struct timeval selectTimeout;
+  
+  selectTimeout.tv_sec = TIMEOUT / 1000;
+  selectTimeout.tv_usec = (TIMEOUT % 1000) * 1000;
+
+  FD_ZERO(&rdset);
+  FD_ZERO(&wrset);
+  */
   return 0;
 }
 
