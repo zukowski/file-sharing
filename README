@@ -1,0 +1,48 @@
+PA3 Network Systems
+Author: Daniel Zukowski <daniel.zukowski@gmail.com>
+Date: Nov 16, 2012
+
+A TCP peer-to-peer file sharing client and server.
+
+------
+Client
+------
+
+To run: ./client <username> <server_ip> <port_no> <comma-separated list of files to share>
+
+The files to share must be located in a folder called "Shared files".
+
+Upon startup, the client requests a TCP connect() to the server.
+When the connection in accept()'d, the client then proceeds to send the server the username, so
+that the server, and other clients connected to the network, can identify this client.
+
+The client has the following commands available:
+	
+CMD								OPERATION
+
+List							Shows a list of all shared files available on the network
+Users							Shows a list of all connected users
+Get <filename>  	Download a file from a peer on the network
+SendMyFilesList 	Send a list of files the client is willing to share with the network
+
+When the client requests a file from a peer, a new connetion is requested of the peer.
+If the peer accepts the connection, the client will send the filename of the file it 
+wishes to download. The peer will then send the file as a byte stream, possibly in
+several chunks, which can then be written to a file on the client side.
+When the file transfer has completed, the TCP connection os torn down and closed by both sides.
+
+
+------
+Server
+------
+
+The server listens for incoming connections on a port that is specified when the server
+process is launched.
+When a new connection request is received, the server accepts the connection, listens for the 
+client to send its username, adds the username to a hash table of connected users, and then spawns
+a new thread to handle any subsequent client interaction.
+
+If a client sends a Get request to the server, the server responds with file information, including the
+owner IP, so that the client can establish a direct connection to the other client who is sharing the file.
+
+When the client exits, the connetion between it and the server is torn down.
